@@ -1,0 +1,1 @@
+# Deployed-django-app-on-EKS-using-Terraform-for-infrastructure-management
