@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: django
+  template:
+    metadata:
+      labels:
+        app: django
+    spec:
+      # Define the shared volume
+      volumes:
+        - name: shared-static-volume
+          emptyDir: {}
+        - name: nginx-config-volume
+          configMap:
+            name: nginx-sidecar-conf
+            
+      containers:
+      # ---------------------------
+      # Container 1: Django (Daphne)
+      # ---------------------------
+      - name: django
+        image: <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-django-app:latest
+        imagePullPolicy: Always
+        
+        # IMPORTANT: Run collectstatic first to fill the shared volume, then start Daphne
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "Collecting static files..."
+            python manage.py migrate
+            python manage.py collectstatic --noinput
+            echo "Starting Daphne..."
+            daphne -b 0.0.0.0 -p 8000 mysite.asgi:application
+
+        ports:
+          - containerPort: 8000
+        
+        # Mount the shared volume to where Django settings.py STATIC_ROOT points
+        volumeMounts:
+          - name: shared-static-volume
+            mountPath: /app/staticfiles 
+        
+        env:
+          - name: POSTGRES_DB
+            value: "mydb"
+          - name: POSTGRES_USER
+            value: "myuser"
+          - name: POSTGRES_PASSWORD
+            value: "mypassword"
+          - name: POSTGRES_HOST
+            value: "postgres-service" # Matches Service name in postgres.yaml
+          - name: REDIS_HOST
+            value: "redis-service"    # Matches Service name in redis.yaml
+          - name: REDIS_PORT
+            value: "6379"
+          - name: ALLOWED_HOSTS
+            value: "*"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+      # ---------------------------
+      # Container 2: Nginx (Sidecar)
+      # ---------------------------
+      - name: nginx
+        image: nginx:alpine
+        ports:
+          - containerPort: 80
+        
+        volumeMounts:
+          # Mount the SAME shared volume to where Nginx expects to read files
+          - name: shared-static-volume
+            mountPath: /var/www/static
+            readOnly: true
+          # Mount the config file
+          - name: nginx-config-volume
+            mountPath: /etc/nginx/conf.d/default.conf
+            subPath: default.conf
